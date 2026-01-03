@@ -1,0 +1,1 @@
+web: python tradingagents_server_prod.py

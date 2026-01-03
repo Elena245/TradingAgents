@@ -30,7 +30,8 @@ class AnalysisRunner:
         self.current_stage = '准备分析...'
         self.result = None
         self.error = None
-        self.enable_translation = config.get('enableChinese', True)  # 默认启用中文
+        self.enable_translation = True
+        print(f"🌐 中文翻译: {'启用' if self.enable_translation else '禁用'}")
 
     def translate_to_chinese(self, text):
         """将英文分析结果翻译为中文 - 仅翻译输出,保留分析的准确性"""
@@ -257,7 +258,13 @@ class AnalysisRunner:
                 # 翻译为中文
                 if self.enable_translation and len(decision_text) > 50:
                     print(f"📝 原始分析长度: {len(decision_text)} 字符")
+                    print(f"🌐 翻译启用状态: {self.enable_translation}")
                     decision_text = self.translate_to_chinese(decision_text)
+                    print(f"📝 翻译后长度: {len(decision_text)} 字符")
+                elif not self.enable_translation:
+                    print(f"⚠️  翻译已禁用,使用英文原文")
+                elif len(decision_text) <= 50:
+                    print(f"⚠️  文本太短 ({len(decision_text)} 字符),跳过翻译")
 
                 # 从文本中提取决策
                 if 'BUY' in decision_text.upper() or '买入' in decision_text:
