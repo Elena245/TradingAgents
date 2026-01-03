@@ -11,7 +11,20 @@ import uuid
 import traceback
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for frontend communication
+
+# 从环境变量获取允许的前端域名
+allowed_origins = (
+    'https://tradingagents-ts-production.up.railway.app'  # 默认值
+)
+
+# 配置 CORS，只允许指定的前端域名
+CORS(app,
+    resources={r"/api/*": {
+    "origins": allowed_origins,
+    "methods": ["GET", "POST", "OPTIONS"],
+    "allow_headers": ["Content-Type", "Authorization"],
+    "credentials": True
+    }})  # Enable CORS for frontend communication
 
 # Store for ongoing analyses
 analyses = {}
@@ -127,8 +140,8 @@ class AnalysisRunner:
                             except:
                                 continue
 
-                        # 删除所有可能的集合 (TradingAgents 使用这三个)
-                        collection_names = ['bull_memory', 'bear_memory', 'trader_memory']
+                        # 删除所有可能的集合 (TradingAgents 使用这五个)
+                        collection_names = ['bull_memory', 'bear_memory', 'trader_memory', 'invest_judge_memory', 'risk_manager_memory']
                         for name in collection_names:
                             try:
                                 client.delete_collection(name=name)
