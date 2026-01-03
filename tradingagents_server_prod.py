@@ -306,17 +306,6 @@ class AnalysisRunner:
                 # decision 是字符串,需要解析
                 decision_text = decision
 
-                # 翻译为中文
-                if self.enable_translation and len(decision_text) > 50:
-                    print(f"📝 原始分析长度: {len(decision_text)} 字符")
-                    print(f"🌐 翻译启用状态: {self.enable_translation}")
-                    decision_text = self.translate_to_chinese(decision_text)
-                    print(f"📝 翻译后长度: {len(decision_text)} 字符")
-                elif not self.enable_translation:
-                    print(f"⚠️  翻译已禁用,使用英文原文")
-                elif len(decision_text) <= 50:
-                    print(f"⚠️  文本太短 ({len(decision_text)} 字符),跳过翻译")
-
                 # 从文本中提取决策
                 if 'BUY' in decision_text.upper() or '买入' in decision_text:
                     decision_action = 'BUY'
@@ -472,6 +461,7 @@ class AnalysisRunner:
             print(f"   可用的键: {list(state.keys())}")
 
             # TradingAgents 通常将数据存储在 'messages' 字段中
+            print("state!!!!", state)
             if 'messages' in state:
                 print(f"\n📨 发现 messages 字段,包含 {len(state['messages'])} 条消息")
                 analysts = self.extract_from_messages(state['messages'])
@@ -484,7 +474,7 @@ class AnalysisRunner:
                     analyst_key = key.replace('_analyst', '').replace('_analysis', '')
                     if analyst_key not in analysts:
                         analysts[analyst_key] = self.parse_analyst_data(
-                            state[key],
+                            self.translate_to_chinese(state[key]),
                             key.replace('_', ' ').title(),
                             analyst_key
                         )
@@ -574,24 +564,24 @@ class AnalysisRunner:
                 content_lower = content.lower()
 
                 if ('fundamental' in content_lower or '基本面' in content_lower) and 'fundamental' not in analysts:
-                    analysts['fundamental'] = self.parse_text_to_analyst(
+                    analysts['fundamental'] = self.translate_to_chinese(self.parse_text_to_analyst(
                         content, '基本面分析师', 'fundamental'
-                    )
+                    ))
 
                 if ('technical' in content_lower or '技术' in content_lower) and 'technical' not in analysts:
-                    analysts['technical'] = self.parse_text_to_analyst(
+                    analysts['technical'] = self.translate_to_chinese(self.parse_text_to_analyst(
                         content, '技术分析师', 'technical'
-                    )
+                    ))
 
                 if ('sentiment' in content_lower or '情绪' in content_lower or 'social' in content_lower) and 'sentiment' not in analysts:
-                    analysts['sentiment'] = self.parse_text_to_analyst(
+                    analysts['sentiment'] = self.translate_to_chinese(self.parse_text_to_analyst(
                         content, '情绪分析师', 'sentiment'
-                    )
+                    ))
 
                 if ('news' in content_lower or '新闻' in content_lower) and 'news' not in analysts:
-                    analysts['news'] = self.parse_text_to_analyst(
+                    analysts['news'] = self.translate_to_chinese(self.parse_text_to_analyst(
                         content, '新闻分析师', 'news'
-                    )
+                    ))
 
         except Exception as e:
             print(f"从 messages 提取时出错: {e}")
