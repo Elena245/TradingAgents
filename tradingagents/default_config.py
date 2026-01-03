@@ -16,13 +16,13 @@ DEFAULT_CONFIG = {
     # Debate and discussion settings
     "max_debate_rounds": 1,
     "max_risk_discuss_rounds": 1,
-    "max_recur_limit": 100,
+    "max_recur_limit": 50,
     # Data vendor configuration
     # Category-level configuration (default for all tools in category)
     "data_vendors": {
         "core_stock_apis": "yfinance",       # Options: yfinance, alpha_vantage, local
         "technical_indicators": "yfinance",  # Options: yfinance, alpha_vantage, local
-        "fundamental_data": "alpha_vantage", # Options: openai, alpha_vantage, local
+        "fundamental_data": "openai",        # Options: openai, alpha_vantage, local
         "news_data": "alpha_vantage",        # Options: openai, alpha_vantage, google, local
     },
     # Tool-level configuration (takes precedence over category-level)

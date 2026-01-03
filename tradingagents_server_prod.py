@@ -5,10 +5,7 @@ This Flask server connects the web frontend to the actual TradingAgents framewor
 
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
-import json
-import os
 import threading
-import time
 from datetime import datetime
 import uuid
 import traceback
@@ -21,7 +18,7 @@ analyses = {}
 
 class AnalysisRunner:
     """运行真实的 TradingAgents 分析"""
-    
+
     def __init__(self, analysis_id, config):
         self.analysis_id = analysis_id
         self.config = config
@@ -30,7 +27,8 @@ class AnalysisRunner:
         self.current_stage = '准备分析...'
         self.result = None
         self.error = None
-        self.enable_translation = True
+        # 始终启用中文翻译 (可以通过 config['enableChinese'] = False 禁用)
+        self.enable_translation = True if config.get('enableChinese') != False else False
         print(f"🌐 中文翻译: {'启用' if self.enable_translation else '禁用'}")
 
     def translate_to_chinese(self, text):
@@ -42,7 +40,14 @@ class AnalysisRunner:
             from openai import OpenAI
             import os
 
-            client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+            # 创建 OpenAI 客户端
+            # 翻译是相对简单的任务,5 分钟足够
+            # (默认是 10 分钟,这里适度降低以避免无限等待)
+            client = OpenAI(
+                api_key=os.getenv('OPENAI_API_KEY'),
+                timeout=300.0,  # 5 分钟 (翻译任务通常 10-30 秒)
+                max_retries=2
+            )
 
             print("🌐 正在将英文分析结果翻译为中文...")
 
@@ -199,9 +204,23 @@ class AnalysisRunner:
             self.current_stage = f'开始分析 {ticker}...'
             self.progress = 20
 
+            print("\n" + "🚀" * 30)
+            print(f"开始 TradingAgents 分析: {ticker} @ {date}")
+            print(f"配置: deep_think={config['deep_think_llm']}, quick_think={config['quick_think_llm']}")
+            print(f"辩论轮数: {config.get('max_debate_rounds', 2)}")
+            print("🚀" * 30 + "\n")
+
             # 运行分析 - 这是真实的 TradingAgents 调用!
             # propagate 方法会运行所有分析师、研究团队、交易员和风险管理
+            import time
+            start_time = time.time()
+
+            print("⏱️  TradingAgents 分析开始...")
             state, decision = ta.propagate(ticker, date)
+
+            elapsed_time = time.time() - start_time
+            print(f"\n⏱️  TradingAgents 分析完成! 耗时: {elapsed_time:.1f} 秒")
+            print("=" * 60)
 
             # 🔍 调试输出 - 帮助理解返回格式
             print("=" * 60)
@@ -212,9 +231,41 @@ class AnalysisRunner:
 
             if isinstance(state, dict):
                 print(f"\nState 包含的键: {list(state.keys())}")
-                # 打印前几个字段的内容
-                for key in list(state.keys())[:5]:
-                    print(f"  {key}: {type(state[key])}")
+                print(f"State 键的数量: {len(state.keys())}")
+
+                # 详细打印每个键的类型和内容预览
+                for key in sorted(state.keys()):
+                    value = state[key]
+                    value_type = type(value).__name__
+
+                    # 获取内容预览
+                    if isinstance(value, str):
+                        preview = value[:100] + "..." if len(value) > 100 else value
+                    elif isinstance(value, list):
+                        preview = f"列表,长度: {len(value)}"
+                    elif isinstance(value, dict):
+                        preview = f"字典,键: {list(value.keys())[:3]}"
+                    else:
+                        preview = str(value)[:100]
+
+                    print(f"  📌 {key}: [{value_type}] {preview}")
+
+                # 特别关注分析师相关的字段
+                print("\n🎯 分析师相关字段:")
+                analyst_keys = [k for k in state.keys() if 'analyst' in k.lower() or
+                                                           'analysis' in k.lower() or
+                                                           'fundamental' in k.lower() or
+                                                           'technical' in k.lower() or
+                                                           'sentiment' in k.lower() or
+                                                           'market' in k.lower() or
+                                                           'news' in k.lower()]
+                if analyst_keys:
+                    for key in analyst_keys:
+                        print(f"  ✅ {key}")
+                else:
+                    print("  ⚠️  未找到明显的分析师字段")
+                    print("  📝 可能数据在 messages 字段中")
+
             else:
                 print(f"\nState 内容 (前500字符): {str(state)[:500]}")
 
@@ -294,16 +345,67 @@ class AnalysisRunner:
                 recommendation = '无法解析决策结果'
                 confidence = 0.5
 
-            # 提取价格信息 - state 可能是字典或有其他结构
+            # 提取价格信息 - 需要从多个可能的来源获取
+            current_price = 0
+            target_price = 0
+            risks = []
+
             if isinstance(state, dict):
-                current_price = state.get('current_price', 0)
-                target_price = state.get('target_price', current_price)
+                # 尝试多种可能的字段名
+                current_price = (
+                    state.get('current_price') or
+                    state.get('price') or
+                    state.get('stock_price') or
+                    0
+                )
+
+                target_price = (
+                    state.get('target_price') or
+                    state.get('price_target') or
+                    0
+                )
+
                 risks = state.get('risks', [])
-            else:
-                # state 不是字典,使用默认值
-                current_price = 0
-                target_price = 0
-                risks = []
+
+                # 如果还没有价格,尝试从 decision 中获取
+                if isinstance(decision, dict) and current_price == 0:
+                    current_price = decision.get('current_price', 0)
+
+                if isinstance(decision, dict) and target_price == 0:
+                    target_price = decision.get('target_price', 0)
+
+            # 如果仍然没有价格,尝试实时获取
+            if current_price == 0:
+                try:
+                    import yfinance as yf
+                    stock = yf.Ticker(ticker)
+                    current_price = stock.info.get('currentPrice', 0) or stock.info.get('regularMarketPrice', 0)
+                    print(f"💰 从 yfinance 获取当前价格: ${current_price}")
+                except Exception as e:
+                    print(f"⚠️  无法获取当前价格: {e}")
+                    current_price = 0
+
+            # 如果有当前价格但没有目标价,使用当前价格
+            if current_price > 0 and target_price == 0:
+                # 检查 decision 文本中是否提到目标价
+                if isinstance(decision, (str, dict)):
+                    decision_str = str(decision)
+                    # 尝试从文本中提取目标价 (简单正则)
+                    import re
+                    price_pattern = r'\$(\d+\.?\d*)'
+                    matches = re.findall(price_pattern, decision_str)
+                    if matches:
+                        # 取最后一个提到的价格作为目标价
+                        try:
+                            target_price = float(matches[-1])
+                            print(f"🎯 从决策文本中提取目标价: ${target_price}")
+                        except:
+                            pass
+
+                # 如果还是没有,使用当前价格
+                if target_price == 0:
+                    target_price = current_price
+                    print(f"⚠️  未找到目标价,使用当前价格: ${current_price}")
 
             # 计算上涨空间
             if current_price > 0 and target_price > 0:
@@ -388,17 +490,23 @@ class AnalysisRunner:
                         )
 
             # 检查是否有直接的分析字段
-            analyst_types = ['fundamental', 'technical', 'sentiment', 'news']
-            for analyst_type in analyst_types:
+            # TradingAgents 实际使用的字段名!
+            analyst_field_mapping = {
+                'fundamental': ['fundamls_report', 'fundamental_report', 'fundamental_analysis', 'fundamentals_report'],  # 注意 fundamls 拼写
+                'technical': ['market_report', 'technical_report', 'technical_analysis'],
+                'sentiment': ['sentiment_report', 'sentiment_analysis'],
+                'news': ['news_report', 'news_analysis']
+            }
+
+            for analyst_type, possible_fields in analyst_field_mapping.items():
                 if analyst_type in analysts:
                     continue  # 已经有了
 
-                for suffix in ['_analysis', '_analyst', '_report', '']:
-                    field_name = f"{analyst_type}{suffix}"
-                    if field_name in state:
-                        print(f"📊 发现 {field_name} 字段")
+                for field_name in possible_fields:
+                    if field_name in state and state[field_name]:
+                        print(f"📊 发现 {analyst_type} 分析: {field_name}")
                         analysts[analyst_type] = self.parse_analyst_data(
-                            state[field_name],
+                            self.translate_to_chinese(state[field_name]),
                             self.get_analyst_chinese_name(analyst_type),
                             analyst_type
                         )
@@ -776,15 +884,23 @@ def get_available_models():
     })
 
 if __name__ == '__main__':
+    import os
+
+    # 从环境变量读取配置 (支持 Railway 部署)
+    port = int(os.getenv('PORT', 5000))
+    host = os.getenv('HOST', '0.0.0.0')
+    debug = os.getenv('DEBUG', 'False').lower() == 'true'
+
     print("=" * 60)
-    print("TradingAgents Frontend API Server - 真实版本")
+    print("TradingAgents API Server")
     print("=" * 60)
-    print(f"启动服务器在 http://localhost:5000")
-    print("确保:")
-    print("  1. TradingAgents 已安装")
-    print("  2. 已设置 OPENAI_API_KEY 环境变量")
-    print("  3. 已设置 ALPHA_VANTAGE_API_KEY 环境变量")
+    print(f"🚀 启动服务器在 {host}:{port}")
+    print(f"   调试模式: {debug}")
+    print(f"   环境: {'Development' if debug else 'Production'}")
+    print("\n确保已设置环境变量:")
+    print("  ✅ OPENAI_API_KEY")
+    print("  ✅ ALPHA_VANTAGE_API_KEY")
     print("=" * 60)
 
     # 运行 Flask 应用
-    app.run(host='0.0.0.0', port=5000, debug=True, threaded=True)
+    app.run(host=host, port=port, debug=debug, threaded=True)
