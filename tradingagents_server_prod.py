@@ -12,19 +12,9 @@ import traceback
 
 app = Flask(__name__)
 
-# 从环境变量获取允许的前端域名
-allowed_origins = (
-    'https://tradingagents-ts-production.up.railway.app'  # 默认值
-)
-
 # 配置 CORS，只允许指定的前端域名
 CORS(app,
-    resources={r"/api/*": {
-    "origins": allowed_origins,
-    "methods": ["GET", "POST", "OPTIONS"],
-    "allow_headers": ["Content-Type", "Authorization"],
-    "credentials": True
-    }})  # Enable CORS for frontend communication
+     origins=["https://tradingagents-ts-production.up.railway.app"])  # Enable CORS for frontend communication
 
 # Store for ongoing analyses
 analyses = {}
