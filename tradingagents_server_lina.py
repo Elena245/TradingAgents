@@ -282,6 +282,9 @@ class AnalysisRunner:
                         f.write(f"{timestamp} [Tool Call] {tool_name}({args_str})\n")
                 return wrapper
 
+            # 定义会被多次更新的 section（只在最终完成时翻译）
+            MULTI_UPDATE_SECTIONS = {"investment_plan", "final_trade_decision"}
+            
             def save_report_section_decorator(obj, func_name):
                 func = getattr(obj, func_name)
                 @wraps(func)
@@ -293,6 +296,30 @@ class AnalysisRunner:
                             file_name = f"{section_name}.md"
                             with open(report_dir / file_name, "w") as f:
                                 f.write(content)
+                            
+                            # 如果启用了翻译，且不是会被多次更新的section，立即异步翻译（不阻塞主流程）
+                            # 对于会被多次更新的section，在最终完成时统一翻译，避免浪费资源
+                            if self.translate_content and content and section_name not in MULTI_UPDATE_SECTIONS:
+                                def translate_section():
+                                    try:
+                                        from lina_test import translate_to_chinese
+                                        current_content = obj.report_sections.get(section_name, content)
+                                        if current_content:
+                                            translated = translate_to_chinese(current_content, enable_translation=True)
+                                            # 存储翻译结果
+                                            if hasattr(obj, 'translated_report_sections'):
+                                                obj.translated_report_sections[section_name] = translated
+                                                print(f"✅ 已翻译 {section_name} ({len(current_content)} 字符)")
+                                    except Exception as e:
+                                        print(f"⚠️  翻译 {section_name} 时出错: {e}")
+                                        # 翻译失败时，标记为None，后续会实时翻译
+                                        if hasattr(obj, 'translated_report_sections'):
+                                            obj.translated_report_sections[section_name] = None
+                                
+                                # 在后台线程中异步翻译
+                                translation_thread = threading.Thread(target=translate_section)
+                                translation_thread.daemon = True
+                                translation_thread.start()
                 return wrapper
 
             self.message_buffer.add_message = save_message_decorator(self.message_buffer, "add_message")
@@ -335,6 +362,7 @@ class AnalysisRunner:
 
             # 流式处理分析
             trace = []
+            last_progress_update = 20  # 从20%开始
             for chunk in graph.graph.stream(init_agent_state, **args):
                 # 检查是否被取消
                 if self.cancelled:
@@ -343,6 +371,8 @@ class AnalysisRunner:
                     self.message_buffer.add_message("System", "Analysis cancelled by user")
                     print(f"分析 {self.analysis_id} 已被取消，停止处理")
                     return
+                
+                trace.append(chunk)
                 
                 if len(chunk.get("messages", [])) > 0:
                     # 获取最后一条消息
@@ -376,6 +406,7 @@ class AnalysisRunner:
                             "market_report", chunk["market_report"]
                         )
                         self.message_buffer.update_agent_status("Market Analyst", "completed")
+                        self.progress = min(85, max(self.progress, 35))
                         if "social" in selected_analysts:
                             self.message_buffer.update_agent_status("Social Analyst", "in_progress")
 
@@ -384,6 +415,7 @@ class AnalysisRunner:
                             "sentiment_report", chunk["sentiment_report"]
                         )
                         self.message_buffer.update_agent_status("Social Analyst", "completed")
+                        self.progress = min(85, max(self.progress, 45))
                         if "news" in selected_analysts:
                             self.message_buffer.update_agent_status("News Analyst", "in_progress")
 
@@ -392,6 +424,7 @@ class AnalysisRunner:
                             "news_report", chunk["news_report"]
                         )
                         self.message_buffer.update_agent_status("News Analyst", "completed")
+                        self.progress = min(85, max(self.progress, 55))
                         if "fundamentals" in selected_analysts:
                             self.message_buffer.update_agent_status("Fundamentals Analyst", "in_progress")
 
@@ -400,6 +433,7 @@ class AnalysisRunner:
                             "fundamentals_report", chunk["fundamentals_report"]
                         )
                         self.message_buffer.update_agent_status("Fundamentals Analyst", "completed")
+                        self.progress = min(85, max(self.progress, 65))
                         self.update_research_team_status("in_progress")
 
                     # Research Team
@@ -441,6 +475,7 @@ class AnalysisRunner:
                                 f"{current_plan}\n\n### Research Manager Decision\n{debate_state['judge_decision']}",
                             )
                             self.update_research_team_status("completed")
+                            self.progress = min(85, max(self.progress, 70))
                             self.message_buffer.update_agent_status("Risky Analyst", "in_progress")
 
                     # Trading Team
@@ -448,6 +483,7 @@ class AnalysisRunner:
                         self.message_buffer.update_report_section(
                             "trader_investment_plan", chunk["trader_investment_plan"]
                         )
+                        self.progress = min(85, max(self.progress, 75))
                         self.message_buffer.update_agent_status("Risky Analyst", "in_progress")
 
                     # Risk Management Team
@@ -501,11 +537,11 @@ class AnalysisRunner:
                             self.message_buffer.update_agent_status("Safe Analyst", "completed")
                             self.message_buffer.update_agent_status("Neutral Analyst", "completed")
                             self.message_buffer.update_agent_status("Portfolio Manager", "completed")
+                            self.progress = min(85, max(self.progress, 85))  # Risk Management完成，达到85%
 
-                    # 更新进度
-                    self.progress = min(90, self.progress + 2)
-
-                trace.append(chunk)
+            # 流式处理完成，更新进度和状态
+            self.current_stage = 'Processing final results...'
+            self.progress = 87
 
             # 获取最终状态和决策
             final_state = trace[-1]
@@ -546,6 +582,8 @@ class AnalysisRunner:
             )
 
             # 更新最终报告部分
+            self.current_stage = 'Updating final reports...'
+            self.progress = 90
             for section in self.message_buffer.report_sections.keys():
                 if section in final_state:
                     self.message_buffer.update_report_section(section, final_state[section])
@@ -553,18 +591,83 @@ class AnalysisRunner:
             # 确保 final_report 已更新
             self.message_buffer._update_final_report()
 
-            self.current_stage = 'Generating display data...'
-            self.progress = 95
+            # 对会被多次更新的 section 进行最终翻译（避免浪费资源）
+            if self.translate_content:
+                self.current_stage = 'Translating multi-update sections...'
+                self.progress = 91
+                print(f"开始翻译会被多次更新的 section（investment_plan, final_trade_decision）...")
+                
+                def translate_multi_update_sections():
+                    """翻译会被多次更新的 section"""
+                    from lina_test import translate_to_chinese
+                    for section_name in MULTI_UPDATE_SECTIONS:
+                        content = self.message_buffer.report_sections.get(section_name)
+                        if content:
+                            try:
+                                translated = translate_to_chinese(content, enable_translation=True)
+                                if hasattr(self.message_buffer, 'translated_report_sections'):
+                                    self.message_buffer.translated_report_sections[section_name] = translated
+                                    print(f"✅ 已翻译 {section_name} ({len(content)} 字符)")
+                            except Exception as e:
+                                print(f"⚠️  翻译 {section_name} 时出错: {e}")
+                                if hasattr(self.message_buffer, 'translated_report_sections'):
+                                    self.message_buffer.translated_report_sections[section_name] = None
+                
+                # 在后台线程中异步翻译（不阻塞主流程）
+                translation_thread = threading.Thread(target=translate_multi_update_sections)
+                translation_thread.daemon = True
+                translation_thread.start()
+                
+                # 等待翻译完成（最多等待30秒）
+                import time
+                max_wait_time = 30
+                wait_interval = 0.5
+                waited_time = 0
+                
+                # 检查哪些 section 需要翻译（有内容的）
+                sections_to_translate = [
+                    section_name for section_name in MULTI_UPDATE_SECTIONS
+                    if self.message_buffer.report_sections.get(section_name)
+                ]
+                
+                if sections_to_translate:
+                    while waited_time < max_wait_time:
+                        all_translated = True
+                        for section_name in sections_to_translate:
+                            translated = self.message_buffer.translated_report_sections.get(section_name)
+                            if translated is None:
+                                all_translated = False
+                                break
+                        
+                        if all_translated:
+                            break
+                        
+                        time.sleep(wait_interval)
+                        waited_time += wait_interval
+                    
+                    if waited_time >= max_wait_time:
+                        print(f"⚠️  翻译等待超时，使用已翻译的内容和原文")
+                else:
+                    print(f"ℹ️  没有需要翻译的多更新 section")
 
-            # 获取最终显示数据
+            # 生成显示数据（优先使用已翻译的内容）
+            self.current_stage = 'Generating display data...'
+            self.progress = 92
+            print(f"开始生成显示数据（优先使用已翻译的内容）...")
+
+            # 获取最终显示数据（优先使用已翻译的内容，如果没有则实时翻译）
+            # 注意：翻译是异步进行的，如果某些section的翻译还在进行中，
+            # 前端可以通过轮询status接口来获取最新的翻译结果
             self.result = get_display_data(
                 translate_content=self.translate_content,
                 message_buffer_instance=self.message_buffer
             )
 
+            # 只有在所有处理完成后才设置为completed
             self.status = 'completed'
             self.current_stage = 'Analysis completed'
             self.progress = 100
+            print(f"分析 {self.analysis_id} 完全完成")
 
         except Exception as e:
             # 如果被取消，不标记为失败

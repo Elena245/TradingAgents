@@ -71,6 +71,16 @@ class MessageBuffer:
             "trader_investment_plan": None,
             "final_trade_decision": None,
         }
+        # 存储已翻译的报告内容（用于流式翻译）
+        self.translated_report_sections = {
+            "market_report": None,
+            "sentiment_report": None,
+            "news_report": None,
+            "fundamentals_report": None,
+            "investment_plan": None,
+            "trader_investment_plan": None,
+            "final_trade_decision": None,
+        }
 
     def add_message(self, message_type, content):
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
@@ -487,11 +497,23 @@ def get_display_data(spinner_text=None, translate_content=True, message_buffer_i
             status_display = get_status_display(status)
             
             # 翻译报告内容（LLM 生成的文本）
+            # 优先使用已翻译的内容（如果存在），否则实时翻译
             translated_report = None
-            if report_content and translate_content:
-                translated_report = translate_to_chinese(report_content, enable_translation=translate_content)
+            if report_content:
+                if translate_content:
+                    # 检查是否有已翻译的内容
+                    if hasattr(mb, 'translated_report_sections') and section_name and section_name in mb.translated_report_sections:
+                        translated_report = mb.translated_report_sections[section_name]
+                        # 如果已翻译内容为空或None，则实时翻译
+                        if not translated_report:
+                            translated_report = translate_to_chinese(report_content, enable_translation=translate_content)
+                    else:
+                        # 没有已翻译内容，实时翻译
+                        translated_report = translate_to_chinese(report_content, enable_translation=translate_content)
+                else:
+                    translated_report = report_content
             else:
-                translated_report = report_content
+                translated_report = None
             
             # 使用英文代理名称作为 key
             team_agents[agent_name] = {
@@ -536,7 +558,19 @@ def get_display_data(spinner_text=None, translate_content=True, message_buffer_i
         # section 名称作为 key 保持英文，不翻译
         if content is not None:
             # 翻译报告内容（LLM 生成的文本）
-            translated_content = translate_to_chinese(content, enable_translation=translate_content) if translate_content else content
+            # 优先使用已翻译的内容（如果存在），否则实时翻译
+            if translate_content:
+                # 检查是否有已翻译的内容
+                if hasattr(mb, 'translated_report_sections') and section_name in mb.translated_report_sections:
+                    translated_content = mb.translated_report_sections[section_name]
+                    # 如果已翻译内容为空或None，则实时翻译
+                    if not translated_content:
+                        translated_content = translate_to_chinese(content, enable_translation=translate_content)
+                else:
+                    # 没有已翻译内容，实时翻译
+                    translated_content = translate_to_chinese(content, enable_translation=translate_content)
+            else:
+                translated_content = content
             report_sections_data[section_name] = {
                 field_names["content"]: translated_content,
                 field_names["has_content"]: True,
@@ -561,7 +595,33 @@ def get_display_data(spinner_text=None, translate_content=True, message_buffer_i
                     # key 保持英文，不翻译
                     # 如果值是字符串（报告内容），根据 translate_content 决定是否翻译
                     if isinstance(value, str) and translate_content:
-                        team_data_display[key] = translate_to_chinese(value, enable_translation=translate_content)
+                        # 尝试找到对应的section名称来获取已翻译内容
+                        # Analyst Team: key 是 agent name，需要找到对应的 section
+                        section_name = None
+                        if team_name == "Analyst Team":
+                            agent_to_section_map = {
+                                "Market Analyst": "market_report",
+                                "Social Analyst": "sentiment_report",
+                                "News Analyst": "news_report",
+                                "Fundamentals Analyst": "fundamentals_report"
+                            }
+                            section_name = agent_to_section_map.get(key)
+                        elif team_name == "Research Team" and key == "investment_plan":
+                            section_name = "investment_plan"
+                        elif team_name == "Trading Team" and key == "trader_investment_plan":
+                            section_name = "trader_investment_plan"
+                        elif team_name == "Portfolio Management" and key == "final_trade_decision":
+                            section_name = "final_trade_decision"
+                        
+                        # 优先使用已翻译的内容
+                        if section_name and hasattr(mb, 'translated_report_sections') and section_name in mb.translated_report_sections:
+                            translated_value = mb.translated_report_sections[section_name]
+                            if translated_value:
+                                team_data_display[key] = translated_value
+                            else:
+                                team_data_display[key] = translate_to_chinese(value, enable_translation=translate_content)
+                        else:
+                            team_data_display[key] = translate_to_chinese(value, enable_translation=translate_content)
                     else:
                         team_data_display[key] = value
                 final_report_display[team_name] = team_data_display
