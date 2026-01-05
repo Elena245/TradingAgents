@@ -822,24 +822,21 @@ def get_display_data(spinner_text=None, translate_content=True, message_buffer_i
                 # 清理agent级别的解析结果：移除全局字段（summary、final_recommendation、key_points）
                 # 这些字段应该只在顶层出现，不应该在每个agent的报告中重复
                 if isinstance(parsed_report, dict):
-                    # 只保留sections和tables，移除全局字段
-                    cleaned_report = {
-                        "sections": parsed_report.get("sections", []),
-                        "tables": parsed_report.get("tables", []),
-                        "raw_content": parsed_report.get("raw_content", translated_report)
-                    }
-                    # 如果sections和tables都为空，保留raw_content
-                    if not cleaned_report["sections"] and not cleaned_report["tables"]:
-                        cleaned_report = {
-                            "raw_content": translated_report
-                        }
+                    # 提取sections和tables，直接放在顶层
+                    sections = parsed_report.get("sections", [])
+                    tables = parsed_report.get("tables", [])
+                    raw_content = parsed_report.get("raw_content", translated_report)
                 else:
-                    cleaned_report = parsed_report
+                    sections = []
+                    tables = []
+                    raw_content = translated_report
             else:
                 translated_report = None
-                cleaned_report = None
+                sections = []
+                tables = []
+                raw_content = None
             
-            # 使用英文代理名称作为 key
+            # 使用英文代理名称作为 key，扁平化结构
             team_agents[agent_name] = {
                 field_names["status"]: status_display,
                 field_names["status_value"]: status,
@@ -848,8 +845,9 @@ def get_display_data(spinner_text=None, translate_content=True, message_buffer_i
                 field_names["pending"]: status == "pending",
                 field_names["error"]: status == "error",
                 field_names["not_selected"]: status == "not_selected",
-                "report": cleaned_report,  # 使用清理后的结构化报告
-                "report_raw": translated_report,  # 保留原始Markdown作为后备
+                "raw_content": raw_content,
+                "sections": sections,
+                "tables": tables,
                 field_names["has_report"]: report_content is not None
             }
         
@@ -903,32 +901,30 @@ def get_display_data(spinner_text=None, translate_content=True, message_buffer_i
             # 清理section级别的解析结果：移除全局字段（summary、final_recommendation、key_points）
             # 这些字段应该只在顶层出现，不应该在每个section中重复
             if isinstance(parsed_content, dict):
-                # 只保留sections和tables，移除全局字段
-                cleaned_content = {
-                    "sections": parsed_content.get("sections", []),
-                    "tables": parsed_content.get("tables", []),
-                    "raw_content": parsed_content.get("raw_content", translated_content)
-                }
-                # 如果sections和tables都为空，保留raw_content
-                if not cleaned_content["sections"] and not cleaned_content["tables"]:
-                    cleaned_content = {
-                        "raw_content": translated_content
-                    }
+                # 提取sections和tables，直接放在顶层
+                sections = parsed_content.get("sections", [])
+                tables = parsed_content.get("tables", [])
+                raw_content = parsed_content.get("raw_content", translated_content)
             else:
-                cleaned_content = parsed_content
+                sections = []
+                tables = []
+                raw_content = translated_content
             
+            # 扁平化结构：直接将sections、tables、raw_content放在顶层
             report_sections_data[section_name] = {
-                "content": cleaned_content,  # 使用清理后的结构化报告
-                "content_raw": translated_content,  # 保留原始Markdown作为后备
-                field_names["has_content"]: True,
-                field_names["content_length"]: len(content) if content else 0
+                "raw_content": raw_content,
+                "sections": sections,
+                "tables": tables,
+                field_names["content_length"]: len(content) if content else 0,
+                field_names["has_content"]: True
             }
         else:
             report_sections_data[section_name] = {
-                "content": None,
-                "content_raw": None,
-                field_names["has_content"]: False,
-                field_names["content_length"]: 0
+                "raw_content": None,
+                "sections": [],
+                "tables": [],
+                field_names["content_length"]: 0,
+                field_names["has_content"]: False
             }
     
     # 处理 final_report：团队名称、代理名称、section 名称作为 key 保持英文，只翻译报告内容

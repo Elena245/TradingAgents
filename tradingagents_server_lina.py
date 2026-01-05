@@ -90,8 +90,10 @@ from tradingagents.default_config import DEFAULT_CONFIG
 
 app = Flask(__name__)
 
-# 配置 CORS
-CORS(app, origins=["http://localhost:3000", "http://localhost:3001"])
+# 配置 CORS，只允许指定的前端域名
+CORS(app, origins=["http://localhost:3000/",
+                   "https://tradingagents-ts-production.up.railway.app"])  # Enable CORS for frontend communication
+
 
 # 存储正在进行的分析
 analyses = {}
