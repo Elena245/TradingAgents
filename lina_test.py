@@ -239,16 +239,23 @@ def parse_markdown_report(markdown_text):
     in_table = False
     table_lines = []
     table_headers = None
+    processed_lines = set()  # 跟踪已处理的行，避免重复解析
     
     i = 0
     while i < len(lines):
+        # 跳过已处理的行
+        if i in processed_lines:
+            i += 1
+            continue
+            
         line = lines[i].strip()
         
         # 检测表格（Markdown表格格式：| col1 | col2 |）
         if '|' in line and line.count('|') >= 2:
             # 检查是否是分隔行（包含---）
             if '---' in line or re.match(r'^\|[\s\-:]+\|', line):
-                # 这是分隔行，跳过
+                # 这是分隔行，标记为已处理并跳过
+                processed_lines.add(i)
                 i += 1
                 continue
             
@@ -258,12 +265,15 @@ def parse_markdown_report(markdown_text):
                 # 提取表头
                 headers = [h.strip() for h in line.split('|')[1:-1]]
                 table_headers = headers
+                processed_lines.add(i)  # 标记表头行为已处理
                 # 检查下一行是否是分隔行
                 if i + 1 < len(lines) and ('---' in lines[i + 1] or re.match(r'^\|[\s\-:]+\|', lines[i + 1])):
+                    processed_lines.add(i + 1)  # 标记分隔行为已处理
                     i += 1
                     continue
             else:
                 # 表格数据行
+                processed_lines.add(i)  # 标记表格数据行为已处理
                 cells = [c.strip() for c in line.split('|')[1:-1]]
                 # 确保单元格数量与表头匹配
                 if table_headers and len(cells) == len(table_headers):
@@ -295,6 +305,7 @@ def parse_markdown_report(markdown_text):
                 in_table = False
                 table_lines = []
                 table_headers = None
+                # 注意：表格行已经在处理时标记为已处理，这里不需要再次标记
             
             # 检测标题（# 开头）
             if line.startswith('#'):
@@ -314,6 +325,8 @@ def parse_markdown_report(markdown_text):
                 current_content = []
             # 检测关键点总结
             elif "关键点总结" in line or "关键点总结表" in line or ("关键点" in line and "表" in line) or "Key Points" in line.lower() or "Summary" in line:
+                # 标记关键点总结标题行为已处理，避免被添加到section内容中
+                processed_lines.add(i)
                 # 查找后续的表格
                 key_points_table = None
                 j = i + 1
@@ -321,21 +334,29 @@ def parse_markdown_report(markdown_text):
                 while j < len(lines) and not lines[j].strip():
                     j += 1
                 
+                table_start_index = None
                 while j < len(lines):
                     check_line = lines[j].strip()
                     # 检查是否是表格行
                     if '|' in check_line and check_line.count('|') >= 2:
                         # 检查是否是分隔行
                         if '---' in check_line or re.match(r'^\|[\s\-:]+\|', check_line):
+                            processed_lines.add(j)  # 标记分隔行为已处理
                             j += 1
                             continue
                         
+                        # 找到表格，记录开始位置
+                        if table_start_index is None:
+                            table_start_index = j
+                        
                         # 找到表格，解析它
                         headers = [h.strip() for h in check_line.split('|')[1:-1]]
+                        processed_lines.add(j)  # 标记表头行为已处理
                         # 跳过分隔行
                         if j + 1 < len(lines):
                             next_line = lines[j + 1].strip()
                             if '---' in next_line or re.match(r'^\|[\s\-:]+\|', next_line):
+                                processed_lines.add(j + 1)  # 标记分隔行为已处理
                                 j += 2
                             else:
                                 j += 1
@@ -354,8 +375,10 @@ def parse_markdown_report(markdown_text):
                             # 如果是表格行
                             if '|' in check_line and check_line.count('|') >= 2:
                                 if '---' in check_line or re.match(r'^\|[\s\-:]+\|', check_line):
+                                    processed_lines.add(j)  # 标记分隔行为已处理
                                     j += 1
                                     continue
+                                processed_lines.add(j)  # 标记表格数据行为已处理
                                 cells = [c.strip() for c in check_line.split('|')[1:-1]]
                                 # 确保单元格数量匹配
                                 if len(cells) == len(headers):
@@ -391,9 +414,12 @@ def parse_markdown_report(markdown_text):
                     j += 1
             # 检测最终交易建议
             elif "最终交易建议" in line or "Final Recommendation" in line.lower() or "最终建议" in line or "Recommendation" in line:
+                # 标记最终交易建议标题行为已处理，避免被添加到section内容中
+                processed_lines.add(i)
                 # 提取建议内容（直到下一个标题或结束）
                 recommendation_content = []
                 j = i + 1
+                # 标记建议内容行为已处理
                 while j < len(lines):
                     check_line = lines[j].strip()
                     # 如果遇到新的标题，停止
@@ -404,6 +430,7 @@ def parse_markdown_report(markdown_text):
                         break
                     if check_line:
                         recommendation_content.append(check_line)
+                        processed_lines.add(j)  # 标记建议内容行为已处理
                     j += 1
                 
                 if recommendation_content:
@@ -411,8 +438,11 @@ def parse_markdown_report(markdown_text):
                         "title": line,
                         "content": '\n'.join(recommendation_content).strip()
                     }
-            # 普通内容
-            elif line:
+                # 跳过已处理的行，继续主循环
+                # j已经在循环中更新到最后一个处理的行，但主循环的i会在最后递增
+                # 所以这里不需要额外操作，主循环会自动跳过已处理的行
+            # 普通内容（排除已处理的行和表格行）
+            elif line and i not in processed_lines:
                 if current_section:
                     current_content.append(line)
                 else:
