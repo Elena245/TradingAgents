@@ -185,6 +185,264 @@ def create_layout():
     return layout
 
 
+def parse_markdown_report(markdown_text):
+    """
+    将Markdown格式的报告解析为结构化的JSON格式
+    
+    Args:
+        markdown_text: Markdown格式的报告文本
+    
+    Returns:
+        dict: 结构化的报告数据，包含：
+            - summary: 摘要文本
+            - sections: 各个章节的列表
+            - tables: 表格数据（对象数组格式，包含headers和data）
+            - key_points: 关键点总结（对象数组格式，包含headers和data）
+            - final_recommendation: 最终交易建议（如果有）
+            - raw_content: 原始Markdown内容（作为后备）
+    
+    表格格式示例：
+        {
+          "headers": ["类别", "详情"],
+          "data": [
+            {"类别": "公司表现", "详情": "AAPL报告了..."},
+            {"类别": "即将发生的事件", "详情": "1月29日财报..."}
+          ]
+        }
+    """
+    if not markdown_text or not isinstance(markdown_text, str):
+        return {
+            "summary": None,
+            "sections": [],
+            "tables": [],
+            "key_points": None,
+            "final_recommendation": None,
+            "raw_content": markdown_text
+        }
+    
+    import re
+    
+    result = {
+        "summary": None,
+        "sections": [],
+        "tables": [],
+        "key_points": None,
+        "final_recommendation": None,
+        "raw_content": markdown_text
+    }
+    
+    # 分割文本为行
+    lines = markdown_text.split('\n')
+    
+    current_section = None
+    current_content = []
+    in_table = False
+    table_lines = []
+    table_headers = None
+    
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        
+        # 检测表格（Markdown表格格式：| col1 | col2 |）
+        if '|' in line and line.count('|') >= 2:
+            # 检查是否是分隔行（包含---）
+            if '---' in line or re.match(r'^\|[\s\-:]+\|', line):
+                # 这是分隔行，跳过
+                i += 1
+                continue
+            
+            if not in_table:
+                in_table = True
+                table_lines = []
+                # 提取表头
+                headers = [h.strip() for h in line.split('|')[1:-1]]
+                table_headers = headers
+                # 检查下一行是否是分隔行
+                if i + 1 < len(lines) and ('---' in lines[i + 1] or re.match(r'^\|[\s\-:]+\|', lines[i + 1])):
+                    i += 1
+                    continue
+            else:
+                # 表格数据行
+                cells = [c.strip() for c in line.split('|')[1:-1]]
+                # 确保单元格数量与表头匹配
+                if table_headers and len(cells) == len(table_headers):
+                    table_lines.append(cells)
+                elif table_headers:
+                    # 如果单元格数量不匹配，尝试填充或截断
+                    while len(cells) < len(table_headers):
+                        cells.append("")
+                    if len(cells) > len(table_headers):
+                        cells = cells[:len(table_headers)]
+                    table_lines.append(cells)
+        else:
+            if in_table:
+                # 表格结束，保存表格数据为对象数组格式
+                if table_headers and table_lines:
+                    table_data = []
+                    for row in table_lines:
+                        row_dict = {}
+                        for j, header in enumerate(table_headers):
+                            if j < len(row):
+                                row_dict[header] = row[j]
+                            else:
+                                row_dict[header] = ""  # 填充空字符串
+                        table_data.append(row_dict)
+                    result["tables"].append({
+                        "headers": table_headers,
+                        "data": table_data
+                    })
+                in_table = False
+                table_lines = []
+                table_headers = None
+            
+            # 检测标题（# 开头）
+            if line.startswith('#'):
+                # 保存之前的section
+                if current_section and current_content:
+                    current_section["content"] = '\n'.join(current_content).strip()
+                    result["sections"].append(current_section)
+                
+                # 新的section
+                level = len(line) - len(line.lstrip('#'))
+                title = line.lstrip('#').strip()
+                current_section = {
+                    "level": level,
+                    "title": title,
+                    "content": ""
+                }
+                current_content = []
+            # 检测关键点总结
+            elif "关键点总结" in line or "关键点总结表" in line or ("关键点" in line and "表" in line) or "Key Points" in line.lower() or "Summary" in line:
+                # 查找后续的表格
+                key_points_table = None
+                j = i + 1
+                # 跳过空行
+                while j < len(lines) and not lines[j].strip():
+                    j += 1
+                
+                while j < len(lines):
+                    check_line = lines[j].strip()
+                    # 检查是否是表格行
+                    if '|' in check_line and check_line.count('|') >= 2:
+                        # 检查是否是分隔行
+                        if '---' in check_line or re.match(r'^\|[\s\-:]+\|', check_line):
+                            j += 1
+                            continue
+                        
+                        # 找到表格，解析它
+                        headers = [h.strip() for h in check_line.split('|')[1:-1]]
+                        # 跳过分隔行
+                        if j + 1 < len(lines):
+                            next_line = lines[j + 1].strip()
+                            if '---' in next_line or re.match(r'^\|[\s\-:]+\|', next_line):
+                                j += 2
+                            else:
+                                j += 1
+                        else:
+                            j += 1
+                        
+                        key_points_data = []
+                        while j < len(lines):
+                            check_line = lines[j].strip()
+                            if not check_line:
+                                j += 1
+                                continue
+                            # 如果遇到新的标题，停止
+                            if check_line.startswith('#'):
+                                break
+                            # 如果是表格行
+                            if '|' in check_line and check_line.count('|') >= 2:
+                                if '---' in check_line or re.match(r'^\|[\s\-:]+\|', check_line):
+                                    j += 1
+                                    continue
+                                cells = [c.strip() for c in check_line.split('|')[1:-1]]
+                                # 确保单元格数量匹配
+                                if len(cells) == len(headers):
+                                    row_dict = {}
+                                    for k, header in enumerate(headers):
+                                        if k < len(cells):
+                                            row_dict[header] = cells[k]
+                                    key_points_data.append(row_dict)
+                                elif len(cells) > 0:
+                                    # 处理不匹配的情况
+                                    while len(cells) < len(headers):
+                                        cells.append("")
+                                    if len(cells) > len(headers):
+                                        cells = cells[:len(headers)]
+                                    row_dict = {}
+                                    for k, header in enumerate(headers):
+                                        row_dict[header] = cells[k] if k < len(cells) else ""
+                                    key_points_data.append(row_dict)
+                                j += 1
+                            else:
+                                # 不是表格行，停止
+                                break
+                        
+                        if key_points_data:
+                            result["key_points"] = {
+                                "headers": headers,
+                                "data": key_points_data
+                            }
+                        break
+                    # 如果遇到新的标题，停止查找
+                    elif check_line.startswith('#'):
+                        break
+                    j += 1
+            # 检测最终交易建议
+            elif "最终交易建议" in line or "Final Recommendation" in line.lower() or "最终建议" in line or "Recommendation" in line:
+                # 提取建议内容（直到下一个标题或结束）
+                recommendation_content = []
+                j = i + 1
+                while j < len(lines):
+                    check_line = lines[j].strip()
+                    # 如果遇到新的标题，停止
+                    if check_line.startswith('#'):
+                        break
+                    # 如果遇到表格，也停止（表格应该单独处理）
+                    if '|' in check_line and check_line.count('|') >= 2:
+                        break
+                    if check_line:
+                        recommendation_content.append(check_line)
+                    j += 1
+                
+                if recommendation_content:
+                    result["final_recommendation"] = {
+                        "title": line,
+                        "content": '\n'.join(recommendation_content).strip()
+                    }
+            # 普通内容
+            elif line:
+                if current_section:
+                    current_content.append(line)
+                else:
+                    # 没有section，作为summary
+                    if not result["summary"]:
+                        result["summary"] = []
+                    result["summary"].append(line)
+        
+        i += 1
+    
+    # 保存最后一个section
+    if current_section:
+        if current_content:
+            current_section["content"] = '\n'.join(current_content).strip()
+        result["sections"].append(current_section)
+    
+    # 处理summary
+    if result["summary"]:
+        result["summary"] = '\n'.join(result["summary"]).strip()
+    
+    # 如果没有解析到结构化内容，保留原始内容
+    if not result["sections"] and not result["tables"] and not result["key_points"] and not result["final_recommendation"]:
+        result["raw_content"] = markdown_text
+    else:
+        # 如果解析到了结构化内容，也保留原始内容作为后备
+        pass
+    
+    return result
+
+
 def translate_to_chinese(text, enable_translation=True):
     """
     将英文文本翻译为中文
@@ -499,6 +757,7 @@ def get_display_data(spinner_text=None, translate_content=True, message_buffer_i
             # 翻译报告内容（LLM 生成的文本）
             # 优先使用已翻译的内容（如果存在），否则实时翻译
             translated_report = None
+            parsed_report = None
             if report_content:
                 if translate_content:
                     # 检查是否有已翻译的内容
@@ -512,8 +771,12 @@ def get_display_data(spinner_text=None, translate_content=True, message_buffer_i
                         translated_report = translate_to_chinese(report_content, enable_translation=translate_content)
                 else:
                     translated_report = report_content
+                
+                # 解析Markdown报告为结构化JSON
+                parsed_report = parse_markdown_report(translated_report)
             else:
                 translated_report = None
+                parsed_report = None
             
             # 使用英文代理名称作为 key
             team_agents[agent_name] = {
@@ -524,7 +787,8 @@ def get_display_data(spinner_text=None, translate_content=True, message_buffer_i
                 field_names["pending"]: status == "pending",
                 field_names["error"]: status == "error",
                 field_names["not_selected"]: status == "not_selected",
-                field_names["report"]: translated_report,
+                "report": parsed_report,  # 使用结构化的报告
+                "report_raw": translated_report,  # 保留原始Markdown作为后备
                 field_names["has_report"]: report_content is not None
             }
         
@@ -571,14 +835,20 @@ def get_display_data(spinner_text=None, translate_content=True, message_buffer_i
                     translated_content = translate_to_chinese(content, enable_translation=translate_content)
             else:
                 translated_content = content
+            
+            # 解析Markdown报告为结构化JSON
+            parsed_content = parse_markdown_report(translated_content)
+            
             report_sections_data[section_name] = {
-                field_names["content"]: translated_content,
+                "content": parsed_content,  # 使用结构化的报告
+                "content_raw": translated_content,  # 保留原始Markdown作为后备
                 field_names["has_content"]: True,
                 field_names["content_length"]: len(content) if content else 0
             }
         else:
             report_sections_data[section_name] = {
-                field_names["content"]: None,
+                "content": None,
+                "content_raw": None,
                 field_names["has_content"]: False,
                 field_names["content_length"]: 0
             }
