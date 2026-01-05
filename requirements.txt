@@ -26,3 +26,5 @@ langchain_anthropic
 langchain-google-genai
 flask
 flask-cors
+typer
+python-dotenv

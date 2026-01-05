@@ -131,16 +131,16 @@ cp .env.example .env
 
 
 ### Flask backend 
+
 确保 TradingAgents 后端服务运行在 `http://localhost:5000`
 
 在 TradingAgents 目录中运行:
 ```bash
-conda activate tradingagents
-pip install flask flask-cors python-dotenv
-
+source activate_env.sh
 python tradingagents_server_dev.py
 ```
-Starting server at http://localhost:5000
+
+服务器将在 `http://localhost:5000` 启动
 
 
 ### CLI Usage

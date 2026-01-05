@@ -13,8 +13,8 @@ import traceback
 app = Flask(__name__)
 
 # 配置 CORS，只允许指定的前端域名
-CORS(app,
-     origins=["https://tradingagents-ts-production.up.railway.app"])  # Enable CORS for frontend communication
+CORS(app, origins=["http://localhost:3000/",
+                   "https://tradingagents-ts-production.up.railway.app"])  # Enable CORS for frontend communication
 
 # Store for ongoing analyses
 analyses = {}
@@ -69,15 +69,17 @@ class AnalysisRunner:
 - 保留专业术语的准确性
 - 公司名称可以用中文+英文格式,如: 高盛集团(Goldman Sachs)
 - 保留 BUY/SELL/HOLD 等关键词,可在后面加中文注释
+- 输出纯文本,不要使用 Markdown 格式符号(如 **, ##, ###)
 
 翻译要求:
 - 自然流畅的中文表达
 - 保持原文的逻辑结构
-- 专业、准确、易读"""
+- 专业、准确、易读
+- 纯文本输出,不带格式符号"""
                     },
                     {
                         "role": "user",
-                        "content": f"请将以下基于英文信息源的股票分析翻译成中文:\n\n{text[:3000]}"
+                        "content": f"请将以下基于英文信息源的股票分析翻译成中文(输出纯文本,不要 Markdown 格式):\n\n{text[:3000]}"
                     }
                 ],
                 max_tokens=2000,
@@ -85,12 +87,63 @@ class AnalysisRunner:
             )
 
             translated = response.choices[0].message.content
+
+            # 清理可能残留的 Markdown 格式
+            translated = self.clean_markdown(translated)
+
             print("✅ 翻译完成")
             return translated
 
         except Exception as e:
             print(f"⚠️  翻译失败: {e},使用原文")
             return text
+
+    def clean_markdown(self, text):
+        """清理文本中的 Markdown 格式符号"""
+        if not text:
+            return text
+
+        import re
+
+        # 移除 Markdown 标题符号 (## ### ####)
+        text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+
+        # 移除加粗符号 (**)
+        text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+
+        # 移除斜体符号 (*)
+        text = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'\1', text)
+
+        # 移除列表符号,替换为项目符号
+        text = re.sub(r'^[\-\*\+]\s+', '• ', text, flags=re.MULTILINE)
+
+        # 移除代码块符号 (```)
+        text = re.sub(r'```[\w]*\n', '', text)
+        text = re.sub(r'```', '', text)
+
+        # 移除行内代码符号 (`)
+        text = re.sub(r'`(.+?)`', r'\1', text)
+
+        # 移除链接格式 [text](url) -> text
+        text = re.sub(r'\[(.+?)\]\(.+?\)', r'\1', text)
+
+        # 移除多余的空行
+        text = re.sub(r'\n{3,}', '\n\n', text)
+
+        return text.strip()
+
+    def translate_with_cleanup(self, text):
+        """翻译并清理 Markdown 格式的便捷方法"""
+        if not text:
+            return text
+
+        # 先翻译
+        translated = self.translate_to_chinese(text)
+
+        # 再清理格式
+        cleaned = self.clean_markdown(translated)
+
+        return cleaned
 
     def cleanup_chromadb(self):
         """清理 ChromaDB 集合,确保每次分析都使用全新数据,避免数据污染"""
@@ -477,7 +530,7 @@ class AnalysisRunner:
                     analyst_key = key.replace('_analyst', '').replace('_analysis', '')
                     if analyst_key not in analysts:
                         analysts[analyst_key] = self.parse_analyst_data(
-                            self.translate_to_chinese(state[key]),
+                            self.translate_with_cleanup(state[key]),
                             key.replace('_', ' ').title(),
                             analyst_key
                         )
@@ -499,7 +552,7 @@ class AnalysisRunner:
                     if field_name in state and state[field_name]:
                         print(f"📊 发现 {analyst_type} 分析: {field_name}")
                         analysts[analyst_type] = self.parse_analyst_data(
-                            self.translate_to_chinese(state[field_name]),
+                            self.translate_with_cleanup(state[field_name]),
                             self.get_analyst_chinese_name(analyst_type),
                             analyst_type
                         )
@@ -567,22 +620,22 @@ class AnalysisRunner:
                 content_lower = content.lower()
 
                 if ('fundamental' in content_lower or '基本面' in content_lower) and 'fundamental' not in analysts:
-                    analysts['fundamental'] = self.translate_to_chinese(self.parse_text_to_analyst(
+                    analysts['fundamental'] = self.translate_with_cleanup(self.parse_text_to_analyst(
                         content, '基本面分析师', 'fundamental'
                     ))
 
                 if ('technical' in content_lower or '技术' in content_lower) and 'technical' not in analysts:
-                    analysts['technical'] = self.translate_to_chinese(self.parse_text_to_analyst(
+                    analysts['technical'] = self.translate_with_cleanup(self.parse_text_to_analyst(
                         content, '技术分析师', 'technical'
                     ))
 
                 if ('sentiment' in content_lower or '情绪' in content_lower or 'social' in content_lower) and 'sentiment' not in analysts:
-                    analysts['sentiment'] = self.translate_to_chinese(self.parse_text_to_analyst(
+                    analysts['sentiment'] = self.translate_with_cleanup(self.parse_text_to_analyst(
                         content, '情绪分析师', 'sentiment'
                     ))
 
                 if ('news' in content_lower or '新闻' in content_lower) and 'news' not in analysts:
-                    analysts['news'] = self.translate_to_chinese(self.parse_text_to_analyst(
+                    analysts['news'] = self.translate_with_cleanup(self.parse_text_to_analyst(
                         content, '新闻分析师', 'news'
                     ))
 
@@ -648,6 +701,9 @@ class AnalysisRunner:
         """将文本解析为分析师数据结构"""
         try:
             import re
+
+            # 首先清理 Markdown 格式符号
+            text = self.clean_markdown(text)
 
             # 提取情绪
             sentiment = '中性'
