@@ -119,6 +119,89 @@ class AnalysisRunner:
         for agent in research_team:
             self.message_buffer.update_agent_status(agent, status)
 
+    def calculate_progress(self):
+        """根据智能体状态动态计算进度百分比"""
+        if not hasattr(self, 'message_buffer') or not self.message_buffer:
+            return self.progress if hasattr(self, 'progress') else 0
+        
+        # 定义各个团队的权重（总权重为100）
+        # 初始化阶段: 10%
+        # Analyst Team: 30% (每个分析师平均分配)
+        # Research Team: 25% (Bull 5%, Bear 5%, Manager 10%, Trader 5%)
+        # Risk Management: 25% (Risky 7%, Safe 7%, Neutral 7%, Portfolio Manager 4%)
+        # 最终处理: 10%
+        
+        progress = 0
+        
+        # 1. 初始化阶段 (10%)
+        if self.status in ['running', 'completed'] and self.current_stage not in ['Initializing analysis...', 'Preparing environment...', 'Initializing TradingAgents graph...']:
+            progress += 10
+        
+        # 2. Analyst Team (30%)
+        analyst_value_to_agent = {
+            "market": "Market Analyst",
+            "social": "Social Analyst",
+            "news": "News Analyst",
+            "fundamentals": "Fundamentals Analyst"
+        }
+        
+        selected_agent_names = set()
+        if hasattr(self.message_buffer, 'selected_analysts') and self.message_buffer.selected_analysts:
+            selected_agent_names = {
+                analyst_value_to_agent[analyst]
+                for analyst in self.message_buffer.selected_analysts
+                if analyst in analyst_value_to_agent
+            }
+        
+        if selected_agent_names:
+            analyst_weight_per_agent = 30.0 / len(selected_agent_names)
+            for agent_name in selected_agent_names:
+                status = self.message_buffer.agent_status.get(agent_name, "pending")
+                if status == "completed":
+                    progress += analyst_weight_per_agent
+                elif status == "in_progress":
+                    progress += analyst_weight_per_agent * 0.5  # 进行中算一半
+        
+        # 3. Research Team (25%)
+        research_agents = {
+            "Bull Researcher": 5,
+            "Bear Researcher": 5,
+            "Research Manager": 10,
+            "Trader": 5
+        }
+        
+        for agent_name, weight in research_agents.items():
+            status = self.message_buffer.agent_status.get(agent_name, "pending")
+            if status == "completed":
+                progress += weight
+            elif status == "in_progress":
+                progress += weight * 0.5
+        
+        # 4. Risk Management Team (25%)
+        risk_agents = {
+            "Risky Analyst": 7,
+            "Safe Analyst": 7,
+            "Neutral Analyst": 7,
+            "Portfolio Manager": 4
+        }
+        
+        for agent_name, weight in risk_agents.items():
+            status = self.message_buffer.agent_status.get(agent_name, "pending")
+            if status == "completed":
+                progress += weight
+            elif status == "in_progress":
+                progress += weight * 0.5
+        
+        # 5. 最终处理阶段 (10%)
+        # 如果流式处理完成，添加这部分进度
+        if self.status == 'running' and self.current_stage in ['Processing final results...', 'Updating final reports...', 'Translating multi-update sections...', 'Generating display data...']:
+            progress += 10
+        elif self.status == 'completed':
+            progress = 100  # 完成时直接设为100
+        
+        # 确保进度在 0-100 之间
+        return min(100, max(0, int(progress)))
+
     def cancel(self):
         """取消正在进行的分析"""
         if self.status in ['running', 'initializing']:
@@ -241,6 +324,9 @@ class AnalysisRunner:
 
             self.current_stage = 'Initializing TradingAgents graph...'
             self.progress = 10
+            
+            # 存储选择的智能体到 message_buffer（用于进度计算）
+            self.message_buffer.selected_analysts = selected_analysts
 
             # 初始化 graph
             graph = TradingAgentsGraph(
@@ -354,7 +440,7 @@ class AnalysisRunner:
             self.message_buffer.update_agent_status(first_analyst, "in_progress")
 
             self.current_stage = f'Analyzing {ticker}...'
-            self.progress = 20
+            self.progress = self.calculate_progress()
 
             # 初始化状态并获取 graph args
             init_agent_state = graph.propagator.create_initial_state(ticker, analysis_date)
@@ -406,35 +492,39 @@ class AnalysisRunner:
                             "market_report", chunk["market_report"]
                         )
                         self.message_buffer.update_agent_status("Market Analyst", "completed")
-                        self.progress = min(85, max(self.progress, 35))
+                        self.progress = self.calculate_progress()
                         if "social" in selected_analysts:
                             self.message_buffer.update_agent_status("Social Analyst", "in_progress")
+                            self.progress = self.calculate_progress()
 
                     if "sentiment_report" in chunk and chunk["sentiment_report"]:
                         self.message_buffer.update_report_section(
                             "sentiment_report", chunk["sentiment_report"]
                         )
                         self.message_buffer.update_agent_status("Social Analyst", "completed")
-                        self.progress = min(85, max(self.progress, 45))
+                        self.progress = self.calculate_progress()
                         if "news" in selected_analysts:
                             self.message_buffer.update_agent_status("News Analyst", "in_progress")
+                            self.progress = self.calculate_progress()
 
                     if "news_report" in chunk and chunk["news_report"]:
                         self.message_buffer.update_report_section(
                             "news_report", chunk["news_report"]
                         )
                         self.message_buffer.update_agent_status("News Analyst", "completed")
-                        self.progress = min(85, max(self.progress, 55))
+                        self.progress = self.calculate_progress()
                         if "fundamentals" in selected_analysts:
                             self.message_buffer.update_agent_status("Fundamentals Analyst", "in_progress")
+                            self.progress = self.calculate_progress()
 
                     if "fundamentals_report" in chunk and chunk["fundamentals_report"]:
                         self.message_buffer.update_report_section(
                             "fundamentals_report", chunk["fundamentals_report"]
                         )
                         self.message_buffer.update_agent_status("Fundamentals Analyst", "completed")
-                        self.progress = min(85, max(self.progress, 65))
+                        self.progress = self.calculate_progress()
                         self.update_research_team_status("in_progress")
+                        self.progress = self.calculate_progress()
 
                     # Research Team
                     if "investment_debate_state" in chunk and chunk["investment_debate_state"]:
@@ -474,17 +564,23 @@ class AnalysisRunner:
                                 "investment_plan",
                                 f"{current_plan}\n\n### Research Manager Decision\n{debate_state['judge_decision']}",
                             )
-                            self.update_research_team_status("completed")
-                            self.progress = min(85, max(self.progress, 70))
+                            # 更新 Research Team 状态
+                            self.message_buffer.update_agent_status("Bull Researcher", "completed")
+                            self.message_buffer.update_agent_status("Bear Researcher", "completed")
+                            self.message_buffer.update_agent_status("Research Manager", "completed")
+                            self.progress = self.calculate_progress()
                             self.message_buffer.update_agent_status("Risky Analyst", "in_progress")
+                            self.progress = self.calculate_progress()
 
                     # Trading Team
                     if "trader_investment_plan" in chunk and chunk["trader_investment_plan"]:
                         self.message_buffer.update_report_section(
                             "trader_investment_plan", chunk["trader_investment_plan"]
                         )
-                        self.progress = min(85, max(self.progress, 75))
+                        self.message_buffer.update_agent_status("Trader", "completed")
+                        self.progress = self.calculate_progress()
                         self.message_buffer.update_agent_status("Risky Analyst", "in_progress")
+                        self.progress = self.calculate_progress()
 
                     # Risk Management Team
                     if "risk_debate_state" in chunk and chunk["risk_debate_state"]:
@@ -537,11 +633,11 @@ class AnalysisRunner:
                             self.message_buffer.update_agent_status("Safe Analyst", "completed")
                             self.message_buffer.update_agent_status("Neutral Analyst", "completed")
                             self.message_buffer.update_agent_status("Portfolio Manager", "completed")
-                            self.progress = min(85, max(self.progress, 85))  # Risk Management完成，达到85%
+                            self.progress = self.calculate_progress()  # 根据智能体状态动态计算进度
 
             # 流式处理完成，更新进度和状态
             self.current_stage = 'Processing final results...'
-            self.progress = 87
+            self.progress = self.calculate_progress()
 
             # 获取最终状态和决策
             final_state = trace[-1]
@@ -577,13 +673,14 @@ class AnalysisRunner:
                         if self.message_buffer.report_sections.get("final_trade_decision"):
                             self.message_buffer.update_agent_status(agent, "completed")
 
+            self.progress = self.calculate_progress()
             self.message_buffer.add_message(
                 "Analysis", f"Completed analysis for {analysis_date}"
             )
 
             # 更新最终报告部分
             self.current_stage = 'Updating final reports...'
-            self.progress = 90
+            self.progress = self.calculate_progress()
             for section in self.message_buffer.report_sections.keys():
                 if section in final_state:
                     self.message_buffer.update_report_section(section, final_state[section])
@@ -594,7 +691,7 @@ class AnalysisRunner:
             # 对会被多次更新的 section 进行最终翻译（避免浪费资源）
             if self.translate_content:
                 self.current_stage = 'Translating multi-update sections...'
-                self.progress = 91
+                self.progress = self.calculate_progress()
                 print(f"开始翻译会被多次更新的 section（investment_plan, final_trade_decision）...")
                 
                 def translate_multi_update_sections():
@@ -652,7 +749,7 @@ class AnalysisRunner:
 
             # 生成显示数据（优先使用已翻译的内容）
             self.current_stage = 'Generating display data...'
-            self.progress = 92
+            self.progress = self.calculate_progress()
             print(f"开始生成显示数据（优先使用已翻译的内容）...")
 
             # 获取最终显示数据（优先使用已翻译的内容，如果没有则实时翻译）
