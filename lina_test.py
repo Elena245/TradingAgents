@@ -323,40 +323,47 @@ def parse_markdown_report(markdown_text):
                     "content": ""
                 }
                 current_content = []
-            # 检测关键点总结
-            elif "关键点总结" in line or "关键点总结表" in line or ("关键点" in line and "表" in line) or "Key Points" in line.lower() or "Summary" in line:
-                # 标记关键点总结标题行为已处理，避免被添加到section内容中
-                processed_lines.add(i)
-                # 查找后续的表格
-                key_points_table = None
+            # 检测关键点总结或总结表
+            elif ("关键点总结" in line or "关键点总结表" in line or ("关键点" in line and "表" in line) or 
+                  "总结表" in line or "Summary Table" in line or ("Summary" in line and "Table" in line) or 
+                  "Key Points" in line.lower()):
+                # 先查找后续的表格，找到后再标记为已处理
+                # 查找后续的表格（允许中间有其他内容，最多查找30行）
                 j = i + 1
-                # 跳过空行
-                while j < len(lines) and not lines[j].strip():
-                    j += 1
+                max_search_lines = 30  # 最多向前查找30行
+                lines_searched = 0
+                table_found = False
                 
-                table_start_index = None
-                while j < len(lines):
+                while j < len(lines) and lines_searched < max_search_lines:
                     check_line = lines[j].strip()
+                    lines_searched += 1
+                    
+                    # 如果遇到新的标题，停止查找
+                    if check_line.startswith('#'):
+                        break
+                    
                     # 检查是否是表格行
                     if '|' in check_line and check_line.count('|') >= 2:
                         # 检查是否是分隔行
                         if '---' in check_line or re.match(r'^\|[\s\-:]+\|', check_line):
-                            processed_lines.add(j)  # 标记分隔行为已处理
                             j += 1
                             continue
                         
-                        # 找到表格，记录开始位置
-                        if table_start_index is None:
-                            table_start_index = j
-                        
-                        # 找到表格，解析它
+                        # 找到表格，开始解析
                         headers = [h.strip() for h in check_line.split('|')[1:-1]]
-                        processed_lines.add(j)  # 标记表头行为已处理
+                        if not headers:
+                            j += 1
+                            continue
+                        
+                        # 标记标题行和表头行为已处理
+                        processed_lines.add(i)  # 标记"总结表"标题行
+                        processed_lines.add(j)  # 标记表头行
+                        
                         # 跳过分隔行
                         if j + 1 < len(lines):
                             next_line = lines[j + 1].strip()
                             if '---' in next_line or re.match(r'^\|[\s\-:]+\|', next_line):
-                                processed_lines.add(j + 1)  # 标记分隔行为已处理
+                                processed_lines.add(j + 1)  # 标记分隔行
                                 j += 2
                             else:
                                 j += 1
@@ -375,10 +382,10 @@ def parse_markdown_report(markdown_text):
                             # 如果是表格行
                             if '|' in check_line and check_line.count('|') >= 2:
                                 if '---' in check_line or re.match(r'^\|[\s\-:]+\|', check_line):
-                                    processed_lines.add(j)  # 标记分隔行为已处理
+                                    processed_lines.add(j)  # 标记分隔行
                                     j += 1
                                     continue
-                                processed_lines.add(j)  # 标记表格数据行为已处理
+                                processed_lines.add(j)  # 标记表格数据行
                                 cells = [c.strip() for c in check_line.split('|')[1:-1]]
                                 # 确保单元格数量匹配
                                 if len(cells) == len(headers):
@@ -403,15 +410,23 @@ def parse_markdown_report(markdown_text):
                                 break
                         
                         if key_points_data:
+                            table_found = True
+                            # 保存到 key_points
                             result["key_points"] = {
                                 "headers": headers,
                                 "data": key_points_data
                             }
-                        break
-                    # 如果遇到新的标题，停止查找
-                    elif check_line.startswith('#'):
+                            # 同时也保存到 tables 中，确保表格能被正确提取
+                            result["tables"].append({
+                                "headers": headers,
+                                "data": key_points_data
+                            })
                         break
                     j += 1
+                
+                # 如果没有找到表格，标记标题行为已处理，避免重复处理
+                if not table_found:
+                    processed_lines.add(i)
             # 检测最终交易建议
             elif "最终交易建议" in line or "Final Recommendation" in line.lower() or "最终建议" in line or "Recommendation" in line:
                 # 标记最终交易建议标题行为已处理，避免被添加到section内容中
@@ -670,7 +685,6 @@ def get_display_data(spinner_text=None, translate_content=True, message_buffer_i
         "content": "content",
         "has_content": "has_content",
         "content_length": "content_length",
-        "current_report": "current_report",
         "final_report": "final_report",
         "report_sections": "sections",
         "waiting": "is_waiting",
@@ -804,9 +818,26 @@ def get_display_data(spinner_text=None, translate_content=True, message_buffer_i
                 
                 # 解析Markdown报告为结构化JSON
                 parsed_report = parse_markdown_report(translated_report)
+                
+                # 清理agent级别的解析结果：移除全局字段（summary、final_recommendation、key_points）
+                # 这些字段应该只在顶层出现，不应该在每个agent的报告中重复
+                if isinstance(parsed_report, dict):
+                    # 只保留sections和tables，移除全局字段
+                    cleaned_report = {
+                        "sections": parsed_report.get("sections", []),
+                        "tables": parsed_report.get("tables", []),
+                        "raw_content": parsed_report.get("raw_content", translated_report)
+                    }
+                    # 如果sections和tables都为空，保留raw_content
+                    if not cleaned_report["sections"] and not cleaned_report["tables"]:
+                        cleaned_report = {
+                            "raw_content": translated_report
+                        }
+                else:
+                    cleaned_report = parsed_report
             else:
                 translated_report = None
-                parsed_report = None
+                cleaned_report = None
             
             # 使用英文代理名称作为 key
             team_agents[agent_name] = {
@@ -817,7 +848,7 @@ def get_display_data(spinner_text=None, translate_content=True, message_buffer_i
                 field_names["pending"]: status == "pending",
                 field_names["error"]: status == "error",
                 field_names["not_selected"]: status == "not_selected",
-                "report": parsed_report,  # 使用结构化的报告
+                "report": cleaned_report,  # 使用清理后的结构化报告
                 "report_raw": translated_report,  # 保留原始Markdown作为后备
                 field_names["has_report"]: report_content is not None
             }
@@ -869,8 +900,25 @@ def get_display_data(spinner_text=None, translate_content=True, message_buffer_i
             # 解析Markdown报告为结构化JSON
             parsed_content = parse_markdown_report(translated_content)
             
+            # 清理section级别的解析结果：移除全局字段（summary、final_recommendation、key_points）
+            # 这些字段应该只在顶层出现，不应该在每个section中重复
+            if isinstance(parsed_content, dict):
+                # 只保留sections和tables，移除全局字段
+                cleaned_content = {
+                    "sections": parsed_content.get("sections", []),
+                    "tables": parsed_content.get("tables", []),
+                    "raw_content": parsed_content.get("raw_content", translated_content)
+                }
+                # 如果sections和tables都为空，保留raw_content
+                if not cleaned_content["sections"] and not cleaned_content["tables"]:
+                    cleaned_content = {
+                        "raw_content": translated_content
+                    }
+            else:
+                cleaned_content = parsed_content
+            
             report_sections_data[section_name] = {
-                "content": parsed_content,  # 使用结构化的报告
+                "content": cleaned_content,  # 使用清理后的结构化报告
                 "content_raw": translated_content,  # 保留原始Markdown作为后备
                 field_names["has_content"]: True,
                 field_names["content_length"]: len(content) if content else 0
@@ -932,17 +980,6 @@ def get_display_data(spinner_text=None, translate_content=True, message_buffer_i
                 else:
                     final_report_display[team_name] = team_data
     
-    # 优先使用 final_report（完整报告，字典格式），如果没有则使用 current_report（当前部分，字符串格式）
-    report_content = None
-    if mb.final_report and len(mb.final_report) > 0:
-        report_content = final_report_display  # 使用处理后的字典格式
-    elif mb.current_report:
-        # 翻译 current_report（如果是字符串）
-        if isinstance(mb.current_report, str) and translate_content:
-            report_content = translate_to_chinese(mb.current_report, enable_translation=translate_content)
-        else:
-            report_content = mb.current_report  # 字符串格式
-    
     # 判断是否在等待：检查 final_report_display 是否有实际内容，或 report_sections 是否有内容
     has_final_report_content = False
     if final_report_display:
@@ -972,7 +1009,6 @@ def get_display_data(spinner_text=None, translate_content=True, message_buffer_i
     waiting_message = "Waiting for analysis report..."
     
     analysis_data = {
-        field_names["current_report"]: report_content,  # 可能是字典或字符串
         field_names["final_report"]: final_report_display,  # 字典格式，按团队组织
         field_names["report_sections"]: report_sections_data,
         field_names["waiting"]: is_waiting,

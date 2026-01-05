@@ -371,6 +371,10 @@ class AnalysisRunner:
             # 定义会被多次更新的 section（只在最终完成时翻译）
             MULTI_UPDATE_SECTIONS = {"investment_plan", "final_trade_decision"}
             
+            # 跟踪正在翻译的section，避免重复翻译
+            translating_sections = set()
+            section_content_hash = {}  # 跟踪每个section的内容hash，避免相同内容重复翻译
+            
             def save_report_section_decorator(obj, func_name):
                 func = getattr(obj, func_name)
                 @wraps(func)
@@ -386,21 +390,50 @@ class AnalysisRunner:
                             # 如果启用了翻译，且不是会被多次更新的section，立即异步翻译（不阻塞主流程）
                             # 对于会被多次更新的section，在最终完成时统一翻译，避免浪费资源
                             if self.translate_content and content and section_name not in MULTI_UPDATE_SECTIONS:
+                                # 计算内容hash，检查内容是否真的改变了
+                                import hashlib
+                                content_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
+                                
+                                # 检查是否已经有翻译结果，且内容没有改变
+                                if hasattr(obj, 'translated_report_sections') and section_name in obj.translated_report_sections:
+                                    existing_translation = obj.translated_report_sections[section_name]
+                                    if existing_translation and section_name in section_content_hash and section_content_hash[section_name] == content_hash:
+                                        # 内容没有改变，且已有翻译，跳过
+                                        return
+                                
+                                # 检查是否正在翻译中
+                                if section_name in translating_sections:
+                                    # 正在翻译中，跳过
+                                    return
+                                
+                                # 内容改变了或没有翻译，开始翻译
+                                section_content_hash[section_name] = content_hash
+                                translating_sections.add(section_name)
+                                
                                 def translate_section():
                                     try:
                                         from lina_test import translate_to_chinese
-                                        current_content = obj.report_sections.get(section_name, content)
+                                        # 再次获取最新内容（可能在翻译过程中被更新）
+                                        current_content = obj.report_sections.get(section_name)
                                         if current_content:
-                                            translated = translate_to_chinese(current_content, enable_translation=True)
-                                            # 存储翻译结果
-                                            if hasattr(obj, 'translated_report_sections'):
-                                                obj.translated_report_sections[section_name] = translated
-                                                print(f"✅ 已翻译 {section_name} ({len(current_content)} 字符)")
+                                            # 再次检查hash，确保内容没有在翻译过程中改变
+                                            current_hash = hashlib.md5(current_content.encode('utf-8')).hexdigest()
+                                            if current_hash == content_hash:
+                                                translated = translate_to_chinese(current_content, enable_translation=True)
+                                                # 存储翻译结果
+                                                if hasattr(obj, 'translated_report_sections'):
+                                                    obj.translated_report_sections[section_name] = translated
+                                                    print(f"✅ 已翻译 {section_name} ({len(current_content)} 字符)")
+                                            else:
+                                                print(f"⚠️  {section_name} 内容在翻译过程中已更新，跳过此次翻译")
                                     except Exception as e:
                                         print(f"⚠️  翻译 {section_name} 时出错: {e}")
                                         # 翻译失败时，标记为None，后续会实时翻译
                                         if hasattr(obj, 'translated_report_sections'):
                                             obj.translated_report_sections[section_name] = None
+                                    finally:
+                                        # 翻译完成，从正在翻译的集合中移除
+                                        translating_sections.discard(section_name)
                                 
                                 # 在后台线程中异步翻译
                                 translation_thread = threading.Thread(target=translate_section)
